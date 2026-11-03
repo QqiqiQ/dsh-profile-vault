@@ -1,0 +1,59 @@
+{
+  "name": "dsh-profile-vault",
+  "version": "0.1.0",
+  "description": "DSH 个人信息库：以姓名为索引保存人物资料，读取先经本会话授权；设置页可浏览与编辑，敏感信息默认掩码。",
+  "type": "module",
+  "license": "MIT",
+  "author": "QqiqiQ",
+  "homepage": "https://github.com/QqiqiQ/dsh-profile-vault#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QqiqiQ/dsh-profile-vault.git"
+  },
+  "bugs": {
+    "url": "https://github.com/QqiqiQ/dsh-profile-vault/issues"
+  },
+  "icon": "./icon.svg",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "profile",
+    "consent",
+    "privacy"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/",
+    "test/",
+    "cordis.patch.yml",
+    "icon.svg",
+    "icon.png",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/vault.test.mjs && node test/tools.test.mjs && node test/client.smoke.test.mjs",
+    "check": "node --check index.js && node --check client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
