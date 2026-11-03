@@ -1,7 +1,7 @@
 {
   "name": "dsh-profile-vault",
-  "version": "0.1.0",
-  "description": "DSH 个人信息库：以姓名为索引保存人物资料，读取先经本会话授权；设置页可浏览与编辑，敏感信息默认掩码。",
+  "version": "0.1.1",
+  "description": "DSH 个人信息库：以姓名为索引保存人物资料，读取先经本会话授权；设置页可浏览与编辑（支持多值条目逐条改），敏感信息默认掩码。",
   "type": "module",
   "license": "MIT",
   "author": "QqiqiQ",

@@ -19,6 +19,7 @@ import { maskValue, tailOf, coerceValue } from '../lib/values.js';
 import { resolveEntry } from '../lib/registry.js';
 import { createStore } from '../lib/store.js';
 import { createVault } from '../lib/ops.js';
+import { viewPerson } from '../lib/read.js';
 import { createConsent, OPTION_SESSION, OPTION_ONCE, OPTION_DENY } from '../lib/grants.js';
 import { createRoutes } from '../lib/routes.js';
 
@@ -136,8 +137,140 @@ test('putEntry: a new value supersedes the old one instead of overwriting it', a
   assert.equal(unchanged.person.entries.birthday.observations.length, 2);
 });
 
-test('putEntry: writing a custom entry twice keeps one entry, not two forks', async (t) => {
+test('multi: a second phone number is kept beside the first, and both are visible', async (t) => {
   const { vault } = await tempVault(t);
+  const person = await vault.createPerson({ displayName: '妙玉' }, { kind: 'tool' });
+
+  await vault.putEntry({ personId: person.id, entryKey: '手机号', value: '13800000001', source: { kind: 'tool' } });
+  const second = await vault.putEntry({ personId: person.id, entryKey: '手机号', value: '13800000002', source: { kind: 'tool' } });
+
+  const record = second.person.entries.phone;
+  assert.equal(record.cardinality, 'multi');
+  const active = record.observations.filter((observation) => observation.supersededAt === null);
+  assert.equal(active.length, 2, 'neither number supersedes the other');
+
+  const view = viewPerson(second.person, { asOfMs: Date.now(), revealSensitive: true });
+  const phone = view.entries.find((entry) => entry.key === 'phone');
+  assert.deepEqual(
+    phone.values.map((item) => item.value),
+    ['13800000001', '13800000002'],
+  );
+});
+
+test('multi: one value can be rewritten in place, without dropping its neighbour', async (t) => {
+  const { vault } = await tempVault(t);
+  const person = await vault.createPerson({ displayName: '秦可卿' }, { kind: 'tool' });
+
+  await vault.putEntry({ personId: person.id, entryKey: '手机号', value: '13800000001', source: { kind: 'tool' } });
+  const second = await vault.putEntry({ personId: person.id, entryKey: '手机号', value: '13800000002', source: { kind: 'tool' } });
+  const target = second.person.entries.phone.observations.find(
+    (observation) => observation.supersededAt === null && observation.value === '13800000002',
+  );
+
+  const edited = await vault.updateObservation({
+    personId: person.id,
+    entryKey: '手机号',
+    observationId: target.id,
+    value: '13900000003',
+  });
+
+  assert.equal(edited.change, 'edited');
+  assert.equal(edited.previous.value, '13800000002');
+  const record = edited.person.entries.phone;
+  assert.equal(record.observations.length, 2, 'editing does not add a record');
+  const active = record.observations.filter((observation) => observation.supersededAt === null);
+  assert.deepEqual(
+    active.map((observation) => observation.value),
+    ['13800000001', '13900000003'],
+    'the neighbour stays, the edited one changes',
+  );
+  assert.ok(typeof active.find((observation) => observation.id === target.id).editedAt === 'string');
+
+  const view = viewPerson(edited.person, { asOfMs: Date.now(), revealSensitive: true });
+  const phone = view.entries.find((entry) => entry.key === 'phone');
+  assert.equal(phone.values.length, 2);
+
+  await assert.rejects(
+    () =>
+      vault.updateObservation({
+        personId: person.id,
+        entryKey: '手机号',
+        observationId: target.id,
+        value: '13800000001',
+      }),
+    (error) => error.code === 'invalid_value',
+    'the same value may not appear twice in one entry',
+  );
+});
+
+test('update: a single entry refuses in-place edits and keeps its history instead', async (t) => {
+  const { vault } = await tempVault(t);
+  const person = await vault.createPerson({ displayName: '李纨' }, { kind: 'tool' });
+  const written = await vault.putEntry({ personId: person.id, entryKey: '生日', value: '1990-05-12', source: { kind: 'tool' } });
+  const observation = written.person.entries.birthday.observations[0];
+
+  await assert.rejects(
+    () =>
+      vault.updateObservation({
+        personId: person.id,
+        entryKey: '生日',
+        observationId: observation.id,
+        value: '1991-05-12',
+      }),
+    (error) => error.code === 'invalid_request',
+  );
+});
+
+test('delete: entries go by their stored key, even for custom keys', async (t) => {
+  const { vault } = await tempVault(t);
+  const person = await vault.createPerson({ displayName: '惜春' }, { kind: 'tool' });
+  await vault.putEntry({ personId: person.id, entryKey: '咖啡口味', value: '拿铁', source: { kind: 'tool' } });
+  await vault.putEntry({ personId: person.id, entryKey: '手机号', value: '13800000001', source: { kind: 'tool' } });
+  await vault.putEntry({ personId: person.id, entryKey: '手机号', value: '13800000002', source: { kind: 'tool' } });
+
+  // Re-deriving "x_咖啡口味" would produce "x_x咖啡口味"; the stored key must win.
+  const removed = await vault.removeEntry({ personId: person.id, entryKey: 'x_咖啡口味' });
+  assert.equal(removed.removed.label, '咖啡口味');
+  assert.equal(removed.person.entries['x_咖啡口味'], undefined);
+
+  const phone = removed.person.entries.phone;
+  const target = phone.observations.find((observation) => observation.supersededAt === null);
+  const afterDelete = await vault.removeObservation({ personId: person.id, entryKey: 'phone', observationId: target.id });
+  assert.equal(afterDelete.person.entries.phone.observations.length, 1, 'one number left, the other is untouched');
+});
+
+test('masked text is refused as a value, and current carries its observation id', async (t) => {
+  const { vault } = await tempVault(t);
+  const person = await vault.createPerson({ displayName: '妙玉' }, { kind: 'tool' });
+  const saved = await vault.putEntry({ personId: person.id, entryKey: '手机号', value: '18633162860', source: { kind: 'tool' } });
+
+  // Re-saving what the panel showed would store literal asterisks forever.
+  await assert.rejects(
+    () => vault.putEntry({ personId: person.id, entryKey: '手机号', value: '186****2860', source: { kind: 'tool' } }),
+    (error) => error.code === 'value_rejected',
+    'a masked display value is not data',
+  );
+
+  const view = viewPerson(saved.person, { asOfMs: Date.now() });
+  const phone = view.entries.find((entry) => entry.key === 'phone');
+  assert.equal(phone.current.masked, true);
+  assert.equal(typeof phone.current.id, 'string', 'one visible value can still be edited in place');
+  assert.equal(phone.values, undefined, 'a single value needs no values array');
+
+  await assert.rejects(
+    () =>
+      vault.updateObservation({
+        personId: person.id,
+        entryKey: '手机号',
+        observationId: phone.current.id,
+        value: '186****2860',
+      }),
+    (error) => error.code === 'value_rejected',
+    'the same guard protects an in-place edit',
+  );
+});
+
+test('putEntry: writing a custom entry twice keeps one entry, not two forks', async (t) => {  const { vault } = await tempVault(t);
   const person = await vault.createPerson({ displayName: '贾宝玉' }, { kind: 'tool' });
 
   await vault.putEntry({ personId: person.id, entryKey: '咖啡口味', value: '拿铁', source: { kind: 'tool' } });
@@ -270,8 +403,31 @@ test('route: a stale baseRev is a conflict, not a silent overwrite', async (t) =
   );
 });
 
-test('route handler: refused connections and non-POST never reach the vault', async (t) => {
+test('route: a write answers with the display mode the panel asked for', async (t) => {
   const { store, vault } = await tempVault(t);
+  const routes = createRoutes({ vault, store, consent: createConsent({ store, config: {} }) });
+
+  const created = await routes.handleWrite({ op: 'create-person', displayName: '探春' });
+  const personId = created.view.person.personId;
+
+  const masked = await routes.handleWrite({ op: 'put-entry', personId, entryKey: '手机号', value: '13800000001' });
+  const maskedPhone = masked.view.entries.find((entry) => entry.key === 'phone');
+  assert.equal(maskedPhone.current.masked, true, 'no reveal asked for, so the answer stays masked');
+
+  const revealed = await routes.handleWrite({
+    op: 'put-entry',
+    personId,
+    entryKey: '手机号',
+    value: '13800000002',
+    reveal: true,
+    baseRev: masked.view.person.rev,
+  });
+  const revealedPhone = revealed.view.entries.find((entry) => entry.key === 'phone');
+  assert.equal(revealedPhone.current.masked, false, 'saving while revealed keeps the values revealed');
+  assert.equal(revealedPhone.current.value, '13800000002');
+});
+
+test('route handler: refused connections and non-POST never reach the vault', async (t) => {  const { store, vault } = await tempVault(t);
   const routes = createRoutes({ vault, store, consent: createConsent({ store, config: {} }) });
 
   const refused = fakeResponse();

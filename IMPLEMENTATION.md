@@ -51,6 +51,13 @@
 - **派生值不落盘**：`年龄/生肖/星座` 在登记表里标 `derived_entry` 拒收；年龄、下次生日由 `viewEntry` 用 `asOf` 现算，附 `approximate`、`leap-day` 警告。
 - **乐观并发**：面板写带 `baseRev`，`guardRevision` 比对 `person.rev`，不一致返回 `conflict`（HTTP 409）+ 当前 `rev`。
 - **HTTP 守卫**：每条请求先 `connection.requestRejection(req)`（未带凭证的本地请求实测 401），再查 `POST` + `application/json` + 体 ≤256KB。
+- **多值条目（email / phone / 爱好…）**：`cardinality:'multi'` 的条目追加观测时不取代旧值，`viewEntry` 因此把**全部有效观测**放进 `entry.values`（`{id,value,observedAt,recordedAt,masked}`，按 `seq` 排序），面板逐行显示并可单条删除——只显示 `current` 会让第二个邮箱看起来没存上。单值条目仍只有 `current` + 历史。
+- **面板编辑内联在卡片里**：点「改值」/「＋ 加一个值」后表单在该卡片内展开（同 key 再点收起），不再回到页面顶部的表单。
+- **多值行原地改写**：每行有「改」，走 `vault.updateObservation({personId, entryKey, observationId, value, observedAt?})`（路由 op `update-observation`）：只改那条观测本身（打 `editedAt`，不动 `id`/`seq`，邻居不受影响），重复值报 `invalid_value`；单值条目明确拒绝原地改（`invalid_request`），保住"旧值留在历史里"的语义。多值条目的「＋ 加一个值」仍是追加。
+- **顺手修掉的旧 bug**：`removeObservation`/`removeEntry` 原来写 `(await resolveKey(person, entryKey)).key`，但 `resolveKey` 返回 `{ok, entry}`，于是按内置键（`phone`）删观测/删条目一律 `unknown_entry`。统一改成 `.entry.key`。
+- **`resolveKey` 先认已存的键**：`resolveEntry('x_学号')` 会把一个已存的自定义键**重新派生**成 `x_x学号`，于是「写」能命中、按同一个键「删」却报 `这个人没有「x_学号」这个条目`（真机截图复现）。现在先 `hasOwnProperty(person.entries, entryKey)`，命中即用；再退回登记表派生；最后才按 key/标签规范化匹配。用真实资料的副本验证过：删 `x_学号` 成功、删 `email` 的一条观测成功、两份都进了 `trash/`。
+- **掩码不是数据**：`coerceValue` 拒收含连续星号的值（`value_rejected`）。面板显示的是掩码时，点「改」从空白开始并提示输入完整内容；`applyWrite` 会把 `reveal`/`history` 一并交给服务端，写回后的视图与按钮状态一致（否则「已显示」其实是星号，再保存就把 `186****2860` 写成真值）。删掉的观测如果当时是掩码，撤销提示会说"无法一键撤销"，不会把星号写回去。
+- **多值条目只有一个值时同样可改**：服务端只在 `active.length > 1` 时返回 `values`，单值多值条目由面板用 `current.id` 补一行，行的「改」「删」与多行一致。
 
 ## 4. 踩到并修掉的坑（值得记下来）
 

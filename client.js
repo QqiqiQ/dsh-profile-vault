@@ -49,7 +49,7 @@ window.__ModuleLoader__.load({
       '.pv-spacer{flex:1}',
       '.pv-field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--dsw-alias-label-secondary)}',
       '.pv-grow{flex:1;min-width:130px}',
-      '.pv-root input[type=text],.pv-root input:not([type]),.pv-root input[type=date],.pv-root textarea{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font-size:13px;font-family:inherit;outline:none;min-width:0}',
+      '.pv-root input[type=text],.pv-root input:not([type]),.pv-root input[type=date],.pv-root textarea{box-sizing:border-box;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font-size:13px;font-family:inherit;outline:none;min-width:0}',
       '.pv-root input:focus,.pv-root textarea:focus{border-color:var(--dsw-alias-brand-primary)}',
       '.pv-root input:disabled{opacity:.6}',
       '.pv-btn{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:5px 11px;font-size:12px;font-family:inherit;cursor:pointer;transition:border-color .12s ease,background .12s ease;white-space:nowrap}',
@@ -73,6 +73,12 @@ window.__ModuleLoader__.load({
       '.pv-badge{font-size:10px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}',
       '.pv-badge-warn{color:var(--dsw-alias-danger-primary,#e5484d);border-color:color-mix(in srgb,var(--dsw-alias-danger-primary,#e5484d) 45%,transparent)}',
       '.pv-entry-value{font-size:15px;line-height:1.35;word-break:break-all}',
+      '.pv-value-list{display:flex;flex-direction:column;gap:4px}',
+      '.pv-value-row{display:flex;align-items:baseline;gap:8px;font-size:15px;line-height:1.35}',
+      '.pv-value-text{word-break:break-all}',
+      '.pv-value-date{font-size:11px;color:var(--dsw-alias-label-secondary);flex:none;margin-left:auto}',
+      '.pv-value-row .pv-btn{flex:none;padding:0 4px;font-size:11px}',
+      '.pv-value-input{flex:1;min-width:0}',
       '.pv-entry-meta{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary)}',
       '.pv-computed{font-size:12px;color:var(--dsw-alias-brand-primary)}',
       '.pv-warnings{margin:0;padding-left:16px;font-size:11px;color:var(--dsw-alias-label-secondary);line-height:1.5}',
@@ -154,6 +160,9 @@ window.__ModuleLoader__.load({
     const SOURCE = { tool: 'AI', panel: '设置页', import: '导入' }
 
     function valueText(entry) {
+      if (Array.isArray(entry.values) && entry.values.length > 0) {
+        return entry.values.map((item) => (entry.kind === 'bool' ? (item.value === true ? '是' : '否') : String(item.value))).join('、')
+      }
       if (entry.current === null || entry.current === undefined) return ''
       const value = entry.current.value
       if (entry.kind === 'bool') return value === true ? '是' : '否'
@@ -184,14 +193,45 @@ window.__ModuleLoader__.load({
       return parts.length === 0 ? null : `现算：${parts.join('；')}`
     }
 
-    function EntryCard({ entry, expanded, onEdit, onDelete, onDeleteObservation, onToggleHistory }) {
+    function EntryCard({
+      entry,
+      expanded,
+      draft,
+      catalog,
+      busy,
+      valueEdit,
+      onValueEditStart,
+      onValueEditChange,
+      onValueEditCancel,
+      onValueEditSubmit,
+      onDraftChange,
+      onDraftCancel,
+      onDraftSubmit,
+      onEdit,
+      onDelete,
+      onDeleteObservation,
+      onToggleHistory,
+    }) {
       const computed = computedText(entry)
+      const multi = entry.cardinality === 'multi'
+      const values = Array.isArray(entry.values) && entry.values.length > 0 ? entry.values : null
+      // A multi entry with a single value has no `values` array (it would just
+      // repeat `current`), but it still needs the per-value 改/删 — otherwise
+      // "多值" entries with one row look uneditable.
+      const rows = values ?? (multi && entry.current !== null && typeof entry.current.id === 'string'
+        ? [{ id: entry.current.id, value: entry.current.value, observedAt: entry.current.observedAt, masked: entry.current.masked === true }]
+        : null)
+      // The editor opens inside this card: a form at the top of the page is where
+      // nobody looks after clicking a button down here.
+      const editing = draft !== null && draft.editing === true && draft.entryKey === entry.key
+
       const head = h(
         'div',
         { className: 'pv-entry-head' },
         h('span', { className: 'pv-entry-label' }, entry.label),
         entry.tier === 'sensitive' ? h('span', { className: 'pv-badge pv-badge-warn' }, '身份类') : null,
         entry.stability === 'volatile' ? h('span', { className: 'pv-badge' }, '易变') : null,
+        multi ? h('span', { className: 'pv-badge' }, '多值') : null,
         entry.key.startsWith('x_') ? h('span', { className: 'pv-badge' }, '自定义') : null,
       )
 
@@ -206,11 +246,79 @@ window.__ModuleLoader__.load({
         entry.current?.ageDays > 0 ? h('span', null, `${entry.current.ageDays} 天前` ) : null,
       )
 
+      const openEdit = valueEdit !== null && rows !== null && valueEdit.entryKey === entry.key ? valueEdit : null
+      const valueBlock =
+        rows === null
+          ? h('div', { className: 'pv-entry-value' }, entry.current === null ? h('span', { className: 'pv-muted' }, '（空）') : valueText(entry))
+          : h(
+              'div',
+              { className: 'pv-value-list' },
+              rows.map((item) => {
+                const editingThis = openEdit !== null && openEdit.id === item.id
+                if (editingThis) {
+                  const commit = () => {
+                    if (!openEdit.busy && String(openEdit.value).trim() !== '') onValueEditSubmit()
+                  }
+                  return h(
+                    'div',
+                    { key: item.id, className: 'pv-value-row is-editing' },
+                    h('input', {
+                      className: 'pv-input pv-value-input',
+                      value: openEdit.value,
+                      disabled: openEdit.busy,
+                      autoFocus: true,
+                      placeholder: openEdit.masked === true ? '当前显示的是掩码，请输入完整内容' : '',
+                      onChange: (event) => onValueEditChange(event.target.value),
+                      onKeyDown: (event) => {
+                        if (event.key === 'Enter') commit()
+                        if (event.key === 'Escape') onValueEditCancel()
+                      },
+                    }),
+                    h('button', { className: 'pv-btn pv-btn-primary', disabled: openEdit.busy, onClick: commit }, '保存'),
+                    h('button', { className: 'pv-btn pv-btn-ghost', disabled: openEdit.busy, onClick: onValueEditCancel }, '取消'),
+                  )
+                }
+                return h(
+                  'div',
+                  { key: item.id, className: 'pv-value-row' },
+                  h('span', { className: 'pv-value-text' }, String(item.value)),
+                  h('span', { className: 'pv-value-date' }, formatDay(item.observedAt)),
+                  h(
+                    'button',
+                    {
+                      className: 'pv-btn pv-btn-ghost',
+                      disabled: busy,
+                      title: '修改这一条值',
+                      'data-value-id': item.id,
+                      onClick: () => onValueEditStart(entry, item),
+                    },
+                    '改',
+                  ),
+                  h(
+                    'button',
+                    {
+                      className: 'pv-btn pv-btn-ghost pv-btn-danger',
+                      disabled: busy,
+                      title: '删除这一条值',
+                      onClick: () =>
+                        onDeleteObservation(entry, {
+                          id: item.id,
+                          value: item.value,
+                          observedAt: item.observedAt,
+                          masked: item.masked === true,
+                        }),
+                    },
+                    '删',
+                  ),
+                )
+              }),
+            )
+
       return h(
         'div',
         { className: 'pv-entry' + (entry.tier === 'sensitive' ? ' is-sensitive' : '') },
         head,
-        h('div', { className: 'pv-entry-value' }, entry.current === null ? h('span', { className: 'pv-muted' }, '（空）') : valueText(entry)),
+        valueBlock,
         meta,
         computed === null ? null : h('div', { className: 'pv-computed' }, computed),
         (entry.warnings ?? []).length === 0
@@ -219,12 +327,24 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'pv-entry-actions' },
-          h('button', { className: 'pv-btn pv-btn-ghost', onClick: () => onEdit(entry) }, '改值'),
+          h('button', { className: 'pv-btn pv-btn-ghost', disabled: busy, onClick: () => onEdit(entry) }, editing ? '收起' : multi ? '＋ 加一个值' : '改值'),
           entry.history.length > 0
             ? h('button', { className: 'pv-btn pv-btn-ghost', onClick: () => onToggleHistory(entry.key) }, expanded ? '收起历史' : `历史 ${entry.history.length}`)
             : null,
           h('button', { className: 'pv-btn pv-btn-ghost pv-btn-danger', onClick: () => onDelete(entry) }, '删条目'),
         ),
+        editing
+          ? h(EntryForm, {
+              draft,
+              catalog,
+              busy,
+              editing: true,
+              onChange: onDraftChange,
+              onCancel: onDraftCancel,
+              onSubmit: onDraftSubmit,
+              submitLabel: multi ? '加进去' : '保存为新值',
+            })
+          : null,
         expanded
           ? h(
               'div',
@@ -255,7 +375,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function EntryForm({ draft, catalog, busy, editing, onChange, onCancel, onSubmit }) {
+    function EntryForm({ draft, catalog, busy, editing, onChange, onCancel, onSubmit, submitLabel }) {
       const set = (key) => (value) => onChange({ ...draft, [key]: value })
       const ready = String(draft.entryKey).trim() !== '' && String(draft.value).trim() !== ''
       return h(
@@ -315,7 +435,7 @@ window.__ModuleLoader__.load({
           ),
           h('div', { className: 'pv-spacer' }),
           onCancel === null ? null : h('button', { className: 'pv-btn pv-btn-ghost', onClick: onCancel, disabled: busy }, '取消'),
-          h('button', { className: 'pv-btn pv-btn-primary', onClick: onSubmit, disabled: busy || !ready }, editing ? '保存为新值' : '添加'),
+          h('button', { className: 'pv-btn pv-btn-primary', onClick: onSubmit, disabled: busy || !ready }, submitLabel ?? (editing ? '保存为新值' : '添加')),
         ),
         h('div', { className: 'pv-hint' }, '「这条信息的时间」指这件事成立/发生的时间，不是录入时间：三个月前量的体重就填那天，不填按今天算。'),
       )
@@ -433,6 +553,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [notice, setNotice] = useState(null)
       const [draft, setDraft] = useState(null)
+      const [valueEdit, setValueEdit] = useState(null)
       const [modal, setModal] = useState(null)
       const [search, setSearch] = useState('')
       const [newName, setNewName] = useState('')
@@ -495,6 +616,7 @@ window.__ModuleLoader__.load({
           setWithHistory(false)
           setExpanded({})
           setDraft(null)
+          setValueEdit(null)
           setError('')
           try {
             await loadPerson(personId, { reveal: false, history: false })
@@ -510,7 +632,9 @@ window.__ModuleLoader__.load({
           setBusy(true)
           setError('')
           try {
-            const result = await requestJson(WRITE_PATH, payload)
+            // The write answers with a view; pass the current display mode along
+            // so revealed values stay revealed instead of snapping back to masks.
+            const result = await requestJson(WRITE_PATH, { ...payload, reveal, history: withHistory })
             if (result?.view) {
               setView(result.view)
               setSelectedId(result.view.person.personId)
@@ -524,7 +648,7 @@ window.__ModuleLoader__.load({
             setBusy(false)
           }
         },
-        [refreshPeople],
+        [refreshPeople, reveal, withHistory],
       )
 
       const emptyDraft = useCallback(
@@ -534,6 +658,7 @@ window.__ModuleLoader__.load({
           observedAt: todayInput(),
           last4: false,
           identity: false,
+          editing: false,
         }),
         [],
       )
@@ -582,29 +707,76 @@ window.__ModuleLoader__.load({
               observationId: observation.id,
               baseRev: view.person.rev,
             })
-            flash(`已删除 ${entry.label} 的一条观测`, {
-              label: '撤销',
-              run: async () => {
-                try {
-                  await applyWrite({
-                    op: 'put-entry',
-                    personId: view.person.personId,
-                    entryKey: entry.key,
-                    value: observation.value,
-                    observedAt: observation.observedAt,
-                  })
-                  flash('已恢复')
-                } catch {
-                  // surfaced
-                }
-              },
-            })
+            const undo =
+              observation.masked === true
+                ? null
+                : {
+                    label: '撤销',
+                    run: async () => {
+                      try {
+                        await applyWrite({
+                          op: 'put-entry',
+                          personId: view.person.personId,
+                          entryKey: entry.key,
+                          value: observation.value,
+                          observedAt: observation.observedAt,
+                        })
+                        flash('已恢复')
+                      } catch {
+                        // surfaced
+                      }
+                    },
+                  }
+            // Undo re-writes the value it saved; a masked one would store stars.
+            flash(
+              observation.masked === true
+                ? `已删除 ${entry.label} 的一条观测（当时显示为掩码，无法一键撤销）`
+                : `已删除 ${entry.label} 的一条观测`,
+              undo,
+            )
           } catch {
             // surfaced
           }
         },
         [applyWrite, flash, view],
       )
+
+      // Editing one value of a multi entry in place — fixing a typo should not
+      // mean "delete the row, then retype it and its date".
+      const startValueEdit = useCallback((entry, item) => {
+        // A masked value is a display artefact — seeding the input with it would
+        // save the asterisks back. Start empty and say why.
+        const masked = item.masked === true
+        setValueEdit({ entryKey: entry.key, id: item.id, value: masked ? '' : String(item.value), masked, busy: false })
+      }, [])
+
+      const cancelValueEdit = useCallback(() => setValueEdit(null), [])
+
+      const changeValueEdit = useCallback((text) => {
+        setValueEdit((current) => (current === null ? current : { ...current, value: text }))
+      }, [])
+
+      const submitValueEdit = useCallback(async () => {
+        if (valueEdit === null || view === null) return
+        const text = String(valueEdit.value).trim()
+        if (text === '') return
+        setValueEdit((current) => (current === null ? current : { ...current, busy: true }))
+        try {
+          await applyWrite({
+            op: 'update-observation',
+            personId: view.person.personId,
+            entryKey: valueEdit.entryKey,
+            observationId: valueEdit.id,
+            value: text,
+            baseRev: view.person.rev,
+          })
+          setValueEdit(null)
+          flash('已修改')
+        } catch {
+          // applyWrite already surfaced the reason; keep the input open for a retry.
+          setValueEdit((current) => (current === null ? current : { ...current, busy: false }))
+        }
+      }, [applyWrite, flash, valueEdit, view])
 
       const filtered = search.trim() === ''
         ? people
@@ -795,17 +967,20 @@ window.__ModuleLoader__.load({
                 '删除这个人',
               ),
             ),
-            draft === null
+            draft === null || draft.editing === true
               ? h(
                   'button',
-                  { className: 'pv-btn pv-btn-primary', onClick: () => setDraft(emptyDraft('')) },
-                  '＋ 添加条目',
+                  {
+                    className: 'pv-btn pv-btn-primary',
+                    onClick: () => setDraft(draft !== null && draft.editing === true ? null : emptyDraft('')),
+                  },
+                  draft !== null && draft.editing === true ? '收起编辑' : '＋ 添加条目',
                 )
               : h(EntryForm, {
                   draft,
                   catalog,
                   busy,
-                  editing: draft.entryKey !== '',
+                  editing: false,
                   onChange: setDraft,
                   onCancel: () => setDraft(null),
                   onSubmit: () => void submitDraft(),
@@ -820,14 +995,36 @@ window.__ModuleLoader__.load({
                       key: entry.key,
                       entry,
                       expanded: expanded[entry.key] === true,
-                      onEdit: (target) =>
+                      draft,
+                      catalog,
+                      busy,
+                      valueEdit,
+                      onValueEditStart: startValueEdit,
+                      onValueEditChange: changeValueEdit,
+                      onValueEditCancel: cancelValueEdit,
+                      onValueEditSubmit: () => void submitValueEdit(),
+                      onDraftChange: setDraft,
+                      onDraftCancel: () => setDraft(null),
+                      onDraftSubmit: () => void submitDraft(),
+                      onEdit: (target) => {
+                        // Clicking "改值" again on the same card closes the editor;
+                        // for a multi entry the draft starts empty — it appends a value
+                        // instead of replacing what is already there.
+                        if (draft !== null && draft.editing === true && draft.entryKey === target.key) {
+                          setDraft(null)
+                          return
+                        }
+                        const multi = target.cardinality === 'multi'
                         setDraft({
                           entryKey: target.key,
-                          value: target.current === null || target.current.masked === true ? '' : valueText(target),
+                          value:
+                            multi || target.current === null || target.current.masked === true ? '' : valueText(target),
                           observedAt: todayInput(),
                           last4: false,
                           identity: target.tier === 'sensitive',
-                        }),
+                          editing: true,
+                        })
+                      },
                       onDelete: (target) => setModal({ kind: 'entry', personId: view.person.personId, entry: target }),
                       onDeleteObservation: (target, observation) => void removeObservation(target, observation),
                       onToggleHistory: (key) => setExpanded((current) => ({ ...current, [key]: current[key] !== true })),

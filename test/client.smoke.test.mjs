@@ -181,6 +181,58 @@ const VIEW = {
       computed: { ageYears: 36, nextOccurrence: { date: '2027-05-12', inDays: 190, turningAge: 37 } },
     },
     {
+      key: 'phone',
+      label: '手机号',
+      kind: 'text',
+      cardinality: 'multi',
+      stability: 'slow',
+      tier: 'normal',
+      unit: null,
+      observations: 2,
+      current: {
+        value: '13800000002',
+        masked: false,
+        observedAt: '2026-10-02T00:00:00.000Z',
+        recordedAt: '2026-10-02T00:00:00.000Z',
+        ageDays: 30,
+        confidence: 'stated',
+        precision: null,
+        source: 'panel',
+      },
+      values: [
+        { id: 'obs_1', value: '13800000001', observedAt: '2026-10-01T00:00:00.000Z', recordedAt: '2026-10-01T00:00:00.000Z', masked: false },
+        { id: 'obs_2', value: '13800000002', observedAt: '2026-10-02T00:00:00.000Z', recordedAt: '2026-10-02T00:00:00.000Z', masked: false },
+      ],
+      history: [],
+      warnings: [],
+    },
+    {
+      // A multi entry that currently has exactly one value: the server omits
+      // `values` (it would only repeat `current`), yet the panel still owes the
+      // row its own 改/删 controls.
+      key: 'phone_backup',
+      label: '备用手机号',
+      kind: 'text',
+      cardinality: 'multi',
+      stability: 'slow',
+      tier: 'sensitive',
+      unit: null,
+      observations: 1,
+      current: {
+        id: 'obs_9',
+        value: '186****2860',
+        masked: true,
+        observedAt: '2026-11-03T00:00:00.000Z',
+        recordedAt: '2026-11-03T00:00:00.000Z',
+        ageDays: 0,
+        confidence: 'stated',
+        precision: null,
+        source: 'panel',
+      },
+      history: [],
+      warnings: ['身份类信息，默认掩码；要看完整值需敏感授权 + revealSensitive。'],
+    },
+    {
       key: 'id_card',
       label: '身份证号',
       kind: 'text',
@@ -303,4 +355,27 @@ test('client: mounts the settings panel and renders a person with masked data', 
   assert.match(text, /身份证号/);
   assert.match(text, /110\*+1234/);
   assert.match(text, /2027-05-12/);
+  assert.match(text, /13800000001/, 'the first number of a multi entry stays visible');
+  assert.match(text, /13800000002/, 'and so does the second');
+  assert.match(text, /186\*+2860/, 'a masked value is shown masked');
+
+  // A multi entry with a single value keeps its per-row controls.
+  let singleRowEdit = null;
+  walk(afterClick, (element) => {
+    if (singleRowEdit === null && element.props?.['data-value-id'] === 'obs_9') singleRowEdit = element;
+  });
+  assert.ok(singleRowEdit !== null, 'single-value multi row has its own 改 button');
+  assert.equal(singleRowEdit.type, 'button');
+
+  // …and editing a masked value starts empty, so the asterisks cannot be saved back.
+  singleRowEdit.props.onClick();
+  const editing = await mount(Panel);
+  let maskedInput = null;
+  walk(editing, (element) => {
+    if (maskedInput === null && element.type === 'input' && String(element.props?.placeholder ?? '').includes('掩码')) {
+      maskedInput = element;
+    }
+  });
+  assert.ok(maskedInput !== null, 'the inline editor explains that the shown value is a mask');
+  assert.equal(maskedInput.props.value, '', 'the editor never seeds itself with masked text');
 });
