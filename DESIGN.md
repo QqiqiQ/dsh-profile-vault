@@ -285,11 +285,13 @@ normalizeName(s) = NFKC(s).trim().replace(/\s+/g, "").toLocaleLowerCase()
 - 计算用 `config.timeZone`（默认 `Asia/Shanghai`）；跨时区会话不改变既有数据解释。
 - `precision` 缺失时：`YYYY-MM-DD`→`day`，`YYYY-MM`→`month`，`YYYY`→`year`；`year` 精度不参与年龄精确计算，返回 `ageYearsRange`。
 
-### 5.6 农历（Phase 3）
+### 5.6 农历（已实现，改用 Intl 中国历）
 
-`calendar: "lunar"` 时值形如 `{ "lunar": "1968-04-15", "isLeapMonth": false }`，同时尽量保留 `solar` 近似值（用户口述的公历日期）。
-- Phase 3 内置 1900–2100 农历表（约 200 行常量，零依赖）做双向换算；未实现前，`computed` 只返回 `warnings: ["农历日期，暂未换算公历"]`，不瞎算。
-- 不要用"农历生日 + 公历年龄"混算；混用时以 `calendar` 字段区分并在结果里标注。
+`birthday_lunar` 的 `kind` 是 `lunar`，值直接存**农历**年月日 `YYYY-MM-DD`（如 `2006-10-10` = 二〇〇六年十月初十），不存阳历——同一天在阳历里每年都不同（2006 年是 11-30，2026 年是 11-18），存阳历必然算错年龄。
+- 换算用运行时的 `Intl.DateTimeFormat('zh-CN-u-ca-chinese')`（Node 自带完整 ICU），不自带 1900–2100 农历表：历法数据属于平台，不会在本仓库里腐烂。
+- 写入时校验该农历日期真实存在（如 2006 年二月没有三十），不存在则 `invalid_value`。
+- 读取时 `computed` 返回 `{ ageYears（农历整岁）, nextOccurrence: { date（阳历）, inDays, turningAge, lunarText } }`；`entry.text` 给「农历 2006 年十月初十」这种人类可读形式，原始值不变。
+- 不要用「农历生日 + 公历年龄」混算；年龄一律按农历月日是否已过来判。
 
 ---
 
@@ -806,9 +808,10 @@ ctx.userQuestions.ask({
 | key | label | 别名 | kind | card. | stability | sensitive |
 |---|---|---|---|---|---|---|
 | `birthday` | 生日 | 出生日期、生辰、生日日期 | date | single | immutable | — |
-| `birthday_lunar` | 农历生日 | 农历生辰 | date(lunar) | single | immutable | — |
+| `birthday_lunar` | 农历生日 | 农历生辰、阴历生日、农历 | lunar | single | immutable | — |
 | `birthplace` | 出生地 | 籍贯、老家 | text | single | immutable | — |
 | `name_full` | 全名 | 姓名、本名 | text | single | immutable | — |
+| `gender` | 性别 | 性别认同、性別 | enum | single | immutable | — |
 | `phone` | 手机号 | 电话、联系方式 | text | multi | slow | ✓ |
 | `email` | 邮箱 | 邮件 | text | multi | slow | ✓ |
 | `address` | 住址 | 家庭住址、现居 | text | single | slow | ✓ |

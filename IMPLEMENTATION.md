@@ -26,12 +26,13 @@
 | `lib/values.js` | 值规整、掩码、尾号、凭证/身份识别 |
 | `lib/names.js` | 姓名规范化、别名匹配、重名判定 |
 | `lib/time.js` | 日期解析、闰日、年龄、下次发生、新鲜度 |
+| `lib/lunar.js` | 农历：阳历↔农历换算、农历解析/格式化、农历年龄、下次农历生日的阳历日 |
 | `lib/ids.js` | ULID 生成（`per_` / `obs_` / `grant_`） |
-| `test/vault.test.mjs` | 15 个：规范化、年龄、闰日、新鲜度、掩码、登记表、追加-取代、自定义条目不分叉、并发写、授权、路由 |
+| `test/vault.test.mjs` | 27 个：规范化、年龄、闰日、农历换算与校验、新鲜度、掩码、登记表、追加-取代、自定义条目不分叉、维度演进（`revive`）、多值自定义条目、并发写、授权、路由 |
 | `test/tools.test.mjs` | 7 个：工具层（参数、拒收、授权弹卡、confirm、输出字段、unchanged 回显、输出 schema 保持宽松） |
 | `test/client.smoke.test.mjs` | 1 个：设置页冒烟（假 React + 假 fetch，点选一个人并渲染掩码值） |
 
-`npm test` 一次跑完 23 个。
+`npm test` 一次跑完 35 个。
 
 ## 2. 实现中与设计稿的偏差
 
@@ -58,6 +59,9 @@
 - **`resolveKey` 先认已存的键**：`resolveEntry('x_学号')` 会把一个已存的自定义键**重新派生**成 `x_x学号`，于是「写」能命中、按同一个键「删」却报 `这个人没有「x_学号」这个条目`（真机截图复现）。现在先 `hasOwnProperty(person.entries, entryKey)`，命中即用；再退回登记表派生；最后才按 key/标签规范化匹配。用真实资料的副本验证过：删 `x_学号` 成功、删 `email` 的一条观测成功、两份都进了 `trash/`。
 - **掩码不是数据**：`coerceValue` 拒收含连续星号的值（`value_rejected`）。面板显示的是掩码时，点「改」从空白开始并提示输入完整内容；`applyWrite` 会把 `reveal`/`history` 一并交给服务端，写回后的视图与按钮状态一致（否则「已显示」其实是星号，再保存就把 `186****2860` 写成真值）。删掉的观测如果当时是掩码，撤销提示会说"无法一键撤销"，不会把星号写回去。
 - **多值条目只有一个值时同样可改**：服务端只在 `active.length > 1` 时返回 `values`，单值多值条目由面板用 `current.id` 补一行，行的「改」「删」与多行一致。
+- **农历生日存农历、不存阳历**：`birthday_lunar` 的 `kind` 是 `lunar`，值存 `2006-10-10`（二〇〇六年十月初十）。同一天在阳历里每年都不同——2006 年是 11-30，2026 年是 11-18——存阳历必然把 20 岁算成 19 岁。`lib/lunar.js` 用 `Intl.DateTimeFormat('zh-CN-u-ca-chinese')` 双向换算（Node 自带完整 ICU），不自带 1900–2100 表；`nextLunarOccurrence` 从 asOf 当天起扫 400 天（当天 `inDays=0`），`lunarAge` 按「农历月日是否已过」算整岁。ICU 对 11/12 月同时给「冬月」和「十一月」两种写法，映射表两者都收。写入时用 `solarOfLunar` 验存在性（2006 年二月没有三十 → `invalid_value`）。
+- **条目定义以登记表为准**：`lib/store.js` 的 `revive()` 在每次读取时把内置条目的 `kind/cardinality/stability/tier/label` 重算成登记表的值（自定义 `x_…` 条目不动）。没有这一步，改过形态的内置条目（农历生日从 `date` 变 `lunar`）会继续按旧定义解析——旧记录永远算错。这是「schema 演进」而不是「迁移脚本」：文件里只存值，形态由代码定义。
+- **自定义条目可以建成多值**：`putEntry` 只在**条目不存在且是自定义条目**时接受 `cardinality:'multi'` 覆盖默认 `single`；内置条目的形态归登记表，传了也不认。面板的新建表单有「可存多个值」勾选，工具侧是 `profile_remember` 的 `cardinality` 参数。修复过程中还发现：按中文标签写一个已存在的自定义条目时，`resolveEntry` 会重新派生出 `single` 的定义、于是把已有条目当成「新条目」并取代旧值——现在无论按 key 还是按标签，只要目标 key 已存在就一律沿用已存定义。
 
 ## 4. 踩到并修掉的坑（值得记下来）
 

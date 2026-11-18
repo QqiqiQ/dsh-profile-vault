@@ -160,6 +160,7 @@ window.__ModuleLoader__.load({
     const SOURCE = { tool: 'AI', panel: '设置页', import: '导入' }
 
     function valueText(entry) {
+      if (typeof entry.text === 'string' && entry.text !== '') return entry.text
       if (Array.isArray(entry.values) && entry.values.length > 0) {
         return entry.values.map((item) => (entry.kind === 'bool' ? (item.value === true ? '是' : '否') : String(item.value))).join('、')
       }
@@ -378,6 +379,18 @@ window.__ModuleLoader__.load({
     function EntryForm({ draft, catalog, busy, editing, onChange, onCancel, onSubmit, submitLabel }) {
       const set = (key) => (value) => onChange({ ...draft, [key]: value })
       const ready = String(draft.entryKey).trim() !== '' && String(draft.value).trim() !== ''
+      const known = catalog.find((item) => item.key === draft.entryKey || item.label === draft.entryKey)
+      const kind = known === undefined ? 'text' : known.kind
+      const valueHint =
+        kind === 'lunar'
+          ? '农历 2006-10-10'
+          : kind === 'date'
+            ? '1990-05-12'
+            : kind === 'datetime'
+              ? '2026-05-12 18:30'
+              : kind === 'number'
+                ? '165'
+                : ''
       return h(
         'div',
         { className: 'pv-form' },
@@ -402,7 +415,7 @@ window.__ModuleLoader__.load({
             h('span', null, '值'),
             h('input', {
               value: draft.value,
-              placeholder: draft.entryKey === 'birthday' ? '1990-05-12' : '',
+              placeholder: valueHint,
               onChange: (event) => set('value')(event.target.value),
             }),
           ),
@@ -433,6 +446,14 @@ window.__ModuleLoader__.load({
             h('input', { type: 'checkbox', checked: draft.identity, onChange: (event) => set('identity')(event.target.checked) }),
             '标为敏感',
           ),
+          editing
+            ? null
+            : h(
+                'label',
+                { className: 'pv-check' },
+                h('input', { type: 'checkbox', checked: draft.multi, onChange: (event) => set('multi')(event.target.checked) }),
+                '可存多个值',
+              ),
           h('div', { className: 'pv-spacer' }),
           onCancel === null ? null : h('button', { className: 'pv-btn pv-btn-ghost', onClick: onCancel, disabled: busy }, '取消'),
           h('button', { className: 'pv-btn pv-btn-primary', onClick: onSubmit, disabled: busy || !ready }, submitLabel ?? (editing ? '保存为新值' : '添加')),
@@ -658,6 +679,7 @@ window.__ModuleLoader__.load({
           observedAt: todayInput(),
           last4: false,
           identity: false,
+          multi: false,
           editing: false,
         }),
         [],
@@ -674,6 +696,7 @@ window.__ModuleLoader__.load({
             observedAt: draft.observedAt === '' ? undefined : draft.observedAt,
             valueMode: draft.last4 ? 'last4' : 'full',
             sensitive: draft.identity === true,
+            ...(draft.multi === true ? { cardinality: 'multi' } : {}),
             baseRev: view.person.rev,
           })
           setDraft(null)
@@ -1017,11 +1040,13 @@ window.__ModuleLoader__.load({
                         const multi = target.cardinality === 'multi'
                         setDraft({
                           entryKey: target.key,
-                          value:
-                            multi || target.current === null || target.current.masked === true ? '' : valueText(target),
+                          // Raw value, not the display text: a lunar birthday shows
+                          // as「农历 2006 年十月初十」but must be edited as 2006-10-10.
+                          value: multi || target.current === null || target.current.masked === true ? '' : String(target.current.value),
                           observedAt: todayInput(),
                           last4: false,
                           identity: target.tier === 'sensitive',
+                          multi,
                           editing: true,
                         })
                       },

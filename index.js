@@ -24,6 +24,7 @@ const GUIDANCE =
   '个人信息库（profile_* 工具）：\n' +
   '- 用户提到某个人的稳定信息（生日、口味、单位、证件…）时用 profile_remember 落库，并带上 observedAt（这件事成立/发生的时间）；不传会被当成"刚刚"。\n' +
   '- 不要存年龄、生肖、星座，也不要自己算：存生日，读取时用返回的 computed（年龄、下次生日）。\n' +
+  '- 农历生日（"几月初几"）用 profile_remember 存 birthday_lunar，值按农历写 2006-10-10；不要把农历换成阳历存进去，读取时会给换算好的阳历日期。\n' +
   '- 读库会弹授权卡；被拒绝或询问失败就照实告诉用户，不要换名字、换个人重试。身份证/银行卡这类敏感条目默认只返回掩码，要完整值需用户单独授权。\n' +
   '- 写身份证/银行卡号这类信息时提醒用户它会明文存在本机；只需要尾号时用 valueMode: "last4"。';
 
@@ -60,8 +61,15 @@ function personSubject(input) {
 
 const INDEX_SUBJECT = { type: 'index', key: 'index', label: '姓名索引' };
 
+function displayOf(entry) {
+  // Lunar birthdays read as「农历 2006 年十月初十」; multi entries keep every value.
+  if (typeof entry.text === 'string' && entry.text !== '') return entry.text;
+  if (Array.isArray(entry.values) && entry.values.length > 0) return entry.values.map((item) => item.value).join('、');
+  return entry.current === null ? '（空）' : String(entry.current.value);
+}
+
 function lineOfEntry(entry) {
-  const parts = [`${entry.label}: ${entry.current === null ? '（空）' : entry.current.value}`];
+  const parts = [`${entry.label}: ${displayOf(entry)}`];
   if (entry.unit !== undefined && entry.unit !== null && entry.kind === 'number') parts[0] += '';
   if (entry.current !== null) {
     parts.push(`观测 ${entry.current.observedAt.slice(0, 10)}`);
@@ -78,7 +86,8 @@ function lineOfEntry(entry) {
     out.push(ageLine);
   } else if (entry.computed?.nextOccurrence !== undefined) {
     const next = entry.computed.nextOccurrence;
-    out.push(`  下次 ${next.date}（${next.inDays === 0 ? '就是今天' : `还有 ${next.inDays} 天`}）`);
+    const lunar = typeof next.lunarText === 'string' ? `，${next.lunarText}` : '';
+    out.push(`  下次 ${next.date}${lunar}（${next.inDays === 0 ? '就是今天' : `还有 ${next.inDays} 天`}）`);
   }
   for (const warning of entry.warnings ?? []) out.push(`  ⚠ ${warning}`);
   return out.join('\n');
@@ -230,6 +239,11 @@ export function apply(ctx, rawConfig) {
       confidence: { type: 'string', enum: ['stated', 'inferred', 'imported'], description: '用户直说 / 你推断 / 导入。' },
       valueMode: { type: 'string', enum: ['full', 'last4'], description: '身份类信息只要尾号时传 last4，完整值不落盘。' },
       sensitive: { type: 'boolean', description: '强制把这条标成敏感（默认由条目登记表判断）。' },
+      cardinality: {
+        type: 'string',
+        enum: ['single', 'multi'],
+        description: '只对新建的自定义条目有效：multi 表示这个条目能存多个值（如"常去的咖啡馆"）。内置条目不需要传。',
+      },
     }),
     output: {
       schema: resultSchema({
@@ -283,6 +297,7 @@ export function apply(ctx, rawConfig) {
           confidence: args.confidence,
           sensitive: args.sensitive === true,
           valueMode: args.valueMode,
+          ...(args.cardinality === 'multi' ? { cardinality: 'multi' } : {}),
           source: { kind: 'tool', sessionId: exec.agent?.id ?? null, agentId: exec.agent?.id ?? null, toolCallId: exec.callId ?? null },
         });
 

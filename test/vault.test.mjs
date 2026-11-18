@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { normalizeName, matchPeople } from '../lib/names.js';
 import { parseDateValue, ageYears, nextOccurrence, staleness } from '../lib/time.js';
 import { maskValue, tailOf, coerceValue } from '../lib/values.js';
+import { formatLunarText, lunarAge, nextLunarOccurrence, parseLunarDate, solarOfLunar } from '../lib/lunar.js';
 import { resolveEntry } from '../lib/registry.js';
 import { createStore } from '../lib/store.js';
 import { createVault } from '../lib/ops.js';
@@ -80,8 +81,146 @@ test('next occurrence: today is inDays 0, and 02-29 falls to 03-01', () => {
   assert.equal(leap.note, 'leap-day');
 });
 
-test('staleness: volatile data goes stale after 90 days, immutable never', () => {
-  const now = Date.parse('2026-11-03T00:00:00Z');
+test('lunar birthday: stored as a lunar date, converted on read', () => {
+  // 2006 年十月初十 was 2006-11-30 in 2006 and is 2026-11-18 in 2026 — storing
+  // the Gregorian date would make the age wrong from the next year on.
+  const birth = parseLunarDate('2006-10-10');
+  assert.deepEqual(birth, { year: 2006, month: 10, day: 10 });
+  assert.deepEqual(solarOfLunar(birth), { year: 2006, month: 11, day: 30 });
+  assert.equal(solarOfLunar({ year: 2006, month: 2, day: 30 }), null);
+  assert.equal(formatLunarText(birth), '农历 2006 年十月初十');
+  assert.equal(parseLunarDate('2006年10月10日').day, 10);
+  assert.equal(parseLunarDate('不是日期'), null);
+
+  const asOf = new Date(2026, 10, 18, 12);
+  assert.equal(lunarAge(birth, asOf), 20);
+  const next = nextLunarOccurrence(birth, asOf);
+  assert.deepEqual({ year: next.year, month: next.month, day: next.day, inDays: next.inDays }, { year: 2026, month: 11, day: 18, inDays: 0 });
+  assert.equal(next.turningAge, undefined);
+
+  // The day after, the same lunar date moves a year out.
+  const later = nextLunarOccurrence(birth, new Date(2026, 10, 19, 12));
+  assert.equal(later.year, 2027);
+  assert.equal(lunarAge(birth, new Date(2026, 10, 19, 12)), 20);
+});
+
+test('lunar value coercion refuses Gregorian-shaped guesses and bad days', () => {
+  const entry = resolveEntry('农历生日').entry;
+  assert.equal(entry.kind, 'lunar');
+  const good = coerceValue(entry, '2006-10-10');
+  assert.equal(good.ok, true);
+  assert.equal(good.value, '2006-10-10');
+
+  const impossible = coerceValue(entry, '2006-02-30');
+  assert.equal(impossible.ok, false);
+  assert.match(impossible.message, /没有/);
+
+  const garbage = coerceValue(entry, '农历十月初十');
+  assert.equal(garbage.ok, false);
+  assert.match(garbage.message, /2006-10-10/);
+});
+
+test('gender is a normal single-valued entry', () => {
+  const resolved = resolveEntry('性别');
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.entry.key, 'gender');
+  assert.equal(resolved.entry.cardinality, 'single');
+});
+
+test('view: a lunar birthday reports the solar date of the next occurrence', async (t) => {
+  const { vault } = await tempVault(t);
+  const person = await vault.createPerson({ displayName: '王睿' });
+  await vault.putEntry({ personId: person.id, entryKey: '农历生日', value: '2006-10-10', source: { kind: 'panel' } });
+  const view = viewPerson(await vault.find({ personId: person.id }), {
+    asOfMs: new Date(2026, 10, 18, 12).getTime(),
+    revealSensitive: false,
+    includeHistory: true,
+  });
+  const entry = view.entries[0];
+  assert.equal(entry.text, '农历 2006 年十月初十');
+  assert.equal(entry.computed.ageYears, 20);
+  assert.equal(entry.computed.nextOccurrence.date, '2026-11-18');
+  assert.equal(entry.computed.nextOccurrence.inDays, 0);
+  assert.equal(entry.computed.nextOccurrence.turningAge, 20);
+  assert.match(entry.computed.nextOccurrence.lunarText, /十月初十/);
+});
+
+test('store: stored definitions follow the registry, custom entries keep theirs', async (t) => {
+  const { store } = await tempVault(t);
+  // A record written under the old schema: 农历生日 was a Gregorian `date`.
+  await store.writePerson({
+    schemaVersion: 1,
+    id: 'per_old',
+    displayName: '旧记录',
+    aliases: [],
+    relation: '',
+    rev: 0,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    entries: {
+      birthday_lunar: {
+        key: 'birthday_lunar',
+        label: '农历生日',
+        kind: 'date',
+        cardinality: 'single',
+        stability: 'immutable',
+        tier: 'normal',
+        observations: [
+          {
+            id: 'obs_old',
+            seq: 1,
+            value: '2006-10-10',
+            observedAt: '2026-01-01T00:00:00.000Z',
+            recordedAt: '2026-01-01T00:00:00.000Z',
+            supersededAt: null,
+            supersededBy: null,
+          },
+        ],
+      },
+      x_自建: {
+        key: 'x_自建',
+        label: '自建',
+        kind: 'number',
+        cardinality: 'multi',
+        stability: 'slow',
+        tier: 'normal',
+        observations: [],
+      },
+    },
+  });
+  const person = await store.readPerson('per_old');
+  assert.equal(person.entries.birthday_lunar.kind, 'lunar');
+  assert.equal(person.entries.x_自建.kind, 'number');
+  assert.equal(person.entries.x_自建.cardinality, 'multi');
+});
+
+test('a new custom entry can be created as multi-valued', async (t) => {
+  const { vault } = await tempVault(t);
+  const person = await vault.createPerson({ displayName: '王睿' });
+  const first = await vault.putEntry({
+    personId: person.id,
+    entryKey: '常去的咖啡馆',
+    value: '山丘',
+    cardinality: 'multi',
+    source: { kind: 'panel' },
+  });
+  assert.equal(first.entry.cardinality, 'multi');
+  await vault.putEntry({ personId: person.id, entryKey: '常去的咖啡馆', value: '南楼', source: { kind: 'panel' } });
+  const view = viewPerson(await vault.find({ personId: person.id }), {
+    asOfMs: Date.now(),
+    revealSensitive: false,
+    includeHistory: false,
+  });
+  const entry = view.entries.find((item) => item.label === '常去的咖啡馆');
+  assert.equal(entry.values.length, 2);
+  assert.deepEqual(entry.values.map((item) => item.value), ['山丘', '南楼']);
+
+  // A built-in entry ignores the flag: its shape belongs to the registry.
+  const builtin = await vault.putEntry({ personId: person.id, entryKey: '生日', value: '2006-11-05', cardinality: 'multi' });
+  assert.equal(builtin.entry.cardinality, 'single');
+});
+
+test('staleness: volatile data goes stale after 90 days, immutable never', () => {  const now = Date.parse('2026-11-03T00:00:00Z');
   const eightyDaysAgo = now - 80 * 86_400_000;
   const fourHundredDaysAgo = now - 400 * 86_400_000;
   assert.equal(staleness('volatile', eightyDaysAgo, now).stale, false);
