@@ -12,6 +12,12 @@
 dsh plugin --profile web add "https://github.com/QqiqiQ/dsh-profile-vault/releases/latest/download/dsh-profile-vault.tgz"
 ```
 
+同样的文件也发布在 npm 上，包名 `dsh-profile-vault`（市场安装走的仍是 Release 里的 tarball，npm 只是第二个取包源）：
+
+```powershell
+dsh plugin --profile web add dsh-profile-vault
+```
+
 改源码想立刻生效，就把 checkout 目录直接装进 profile（DSH 读 `dsh.bundle.patch` 插入 `profile-vault` 这一项）：
 
 ```powershell
